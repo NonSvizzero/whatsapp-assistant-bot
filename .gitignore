@@ -101,3 +101,7 @@ ENV/
 
 # mypy
 .mypy_cache/
+/src/pics/
+.idea/markdown-navigator.xml
+.idea/markdown-navigator/
+src/pics/
