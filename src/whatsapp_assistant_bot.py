@@ -2,34 +2,34 @@ from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
 from selenium.common.exceptions import NoSuchElementException, StaleElementReferenceException, \
     ElementNotVisibleException
+from collections import deque, Counter
+from datetime import datetime, timedelta
 import time
 import os
-import glob
 import random
 
 driver = webdriver.Chrome()  # Needs to be global for all classes to use
 driver.get('https://web.whatsapp.com')
 
+QUEUE_LEN = 100
+EMOJIS = {u'\U0001f638', u'\U0001f639', u'\U0001f63a', u'\U0001f63b', u'\U0001f63c', u'\U0001f63d', u'\U0001f63e',
+          u'\U0001f63f', u'\U0001f640', u'\U0001f431', u'\U0001f408'}
+PICS_DIR = os.path.expanduser("~/Pictures/cats")
+
 
 class BotConfig(object):
-    last_msg = False
-    last_msg_id = False
+    messages = deque(maxlen=QUEUE_LEN)
+    start = datetime.now() - timedelta(minutes=1)
 
-    command_history = []
-    last_command = ""
-
-    def set_last_chat_message(self, msg, time_id):
-        self.last_msg = msg
-        self.last_msg_id = time_id
-
-    def get_last_chat_message(self):
-        return self.last_msg, self.last_msg_id
+    def update_messages(self, messages):
+        new_messages = [msg for msg in messages if msg[0] in EMOJIS
+                        and datetime.strptime(msg[1][1:msg[1].find(']')],'%H:%M, %m/%d/%Y') > self.start]
+        diff = Counter(new_messages) - Counter(self.messages)
+        self.messages.extend(diff.elements())
+        return sum(diff.values())
 
 
 class Bot(object):
-    EMOJIS = {u'\U0001f638', u'\U0001f639', u'\U0001f63a', u'\U0001f63b', u'\U0001f63c', u'\U0001f63d', u'\U0001f63e',
-              u'\U0001f63f', u'\U0001f640', u'\U0001f431', u'\U0001f408'}
-
     def __init__(self):
         self.config = BotConfig()
         self.init_bot()
@@ -39,33 +39,29 @@ class Bot(object):
             self.poll_chat()
 
     def poll_chat(self):
-        last_msg = self.chat_history()
+        messages = self.chat_history()
+        if messages:
+            for _ in range(self.config.update_messages(messages)):
+                print("Received a cat emoji. Sending cat pic...")
+                self.send_cat_media()
 
-        if last_msg:
-            time_id = time.strftime('%H-%M-%S', time.gmtime())
-
-            last_saved_msg, last_saved_msg_id = self.config.get_last_chat_message()
-            if last_saved_msg != last_msg and last_saved_msg_id != time_id:
-                self.config.set_last_chat_message(msg=last_msg, time_id=time_id)
-
-                print(self.config.get_last_chat_message())
-
-                if last_msg in self.EMOJIS:
-                    print("Received a cat emoji. Sending cat pic...")
-                    self.send_cat_media()
-
-    def chat_history(self, out=True):
-        emojis = driver.find_elements_by_xpath("//*[@class='_3lZNp QkfD1 selectable-text invisible-space copyable-text']")
+    def chat_history(self, messages=QUEUE_LEN):
+        text_bubbles = driver.find_elements_by_class_name("_3DFk6")
         tmp_queue = []
 
         try:
-            for emoji in emojis:
-                # raw_msg_text = msg.find_element_by_class_name("selectable-text.invisible-space.copyable-text").text.lower()
-                # raw_msg_time = msg.find_element_by_class_name("bubble-text-meta").text        # time message sent
-                tmp_queue.append(emoji.get_attribute("alt"))
+            for bubble in text_bubbles:
+                try:
+                    time_sent = bubble.find_element_by_class_name("copyable-text").get_attribute("data-pre-plain-text")
+                    emoji = bubble.find_elements_by_xpath(
+                        "//*[@class='_3lZNp QkfD1 selectable-text invisible-space copyable-text']")[0].get_attribute(
+                        "alt")
+                except IndexError:
+                    continue
+                tmp_queue.append((emoji, time_sent))
 
             if len(tmp_queue) > 0:
-                return tmp_queue[-1]  # Send last message in list
+                return tmp_queue[-min(messages, len(tmp_queue)):]  # Send last messages in list
 
         except StaleElementReferenceException as e:
             print(str(e))
@@ -79,8 +75,6 @@ class Bot(object):
         whatsapp_msg.send_keys(Keys.ENTER)
 
     def attach_and_send_gif(self, path):
-        # TODO - ElementNotVisibleException - this shouldn't happen but when would it
-
         # local variables for x_path elements on browser
         attach_xpath = '//*[@id="main"]/header/div[3]/div/div[2]/div'
         send_file_xpath = '//*[@id="app"]/div/div/div[1]/div[2]/span/div/span/div/div/div[2]/span[2]/div/div'
@@ -108,13 +102,12 @@ class Bot(object):
 
         except (NoSuchElementException, ElementNotVisibleException) as e:
             print(str(e))
-            self.send_message((str(e)))
-            self.send_message("Bot failed to retrieve search content, try again...")
 
     def send_cat_media(self):
-        medias = [x for x in os.listdir('./src/pics') if x[-4:] in ('.mp4', '.jpg', '.png')]
-        media = os.path.join(os.getcwd(), 'src/pics', random.choice(medias))
+        medias = [x for x in os.listdir(PICS_DIR) if x[-4:] in ('.mp4', '.jpg', '.png')]
+        media = os.path.join(PICS_DIR, random.choice(medias))
         self.attach_and_send_gif(media)
+
 
 if __name__ == "__main__":
     print("Bot is active, scan your QR code from your phone's WhatsApp")
